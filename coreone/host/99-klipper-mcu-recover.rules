@@ -1,0 +1,6 @@
+# Cold-boot recovery for a separately-powered host: when the F427 Klipper MCU
+# re-enumerates (printer power-cycled under a running klippy), start the
+# auto-recover oneshot, which FIRMWARE_RESTARTs klippy if it's stuck in shutdown.
+# Matches the F427 only (ID_MODEL stm32f427xx) so it fires once -- the H503
+# (stm32h503xx) deliberately does not match.
+ACTION=="add", SUBSYSTEM=="tty", ENV{ID_MODEL}=="stm32f427xx", TAG+="systemd", ENV{SYSTEMD_WANTS}="klipper-mcu-recover.service"
