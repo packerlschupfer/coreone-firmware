@@ -326,13 +326,16 @@ can_init(void)
     canhw_set_filter(0);
 
     /*##-3- Configure Interrupts #################################*/
-    armcm_enable_irq(CAN_IRQHandler, CAN_RX0_IRQn, 0);
+    // priority 1, not 0: 0 is reserved for the phase-stepping IRQ under BASEPRI
+    // critical sections (see src/generic/armcm_irq.c). 1 keeps CAN masked in
+    // irq_disable() and still above the scheduler (SysTick=2).
+    armcm_enable_irq(CAN_IRQHandler, CAN_RX0_IRQn, 1);
     if (CAN_RX0_IRQn != CAN_RX1_IRQn)
-        armcm_enable_irq(CAN_IRQHandler, CAN_RX1_IRQn, 0);
+        armcm_enable_irq(CAN_IRQHandler, CAN_RX1_IRQn, 1);
     if (CAN_RX0_IRQn != CAN_TX_IRQn)
-        armcm_enable_irq(CAN_IRQHandler, CAN_TX_IRQn, 0);
+        armcm_enable_irq(CAN_IRQHandler, CAN_TX_IRQn, 1);
     if (CAN_RX0_IRQn != CAN_SCE_IRQn)
-        armcm_enable_irq(CAN_IRQHandler, CAN_SCE_IRQn, 0);
+        armcm_enable_irq(CAN_IRQHandler, CAN_SCE_IRQn, 1);
     SOC_CAN->IER = CAN_IER_FMPIE0 | CAN_IER_ERRIE | CAN_IER_LECIE;
 }
 DECL_INIT(can_init);

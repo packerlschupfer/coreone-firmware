@@ -93,6 +93,12 @@ struct i2c_info {
   DECL_CONSTANT_STR("BUS_PINS_i2c2_PB10_PB11", "PB10,PB11");
   DECL_ENUMERATION("i2c_bus", "i2c3_PA8_PC9", 3);
   DECL_CONSTANT_STR("BUS_PINS_i2c3_PA8_PC9", "PA8,PC9");
+#elif CONFIG_MACH_STM32H5
+  // xBuddy extension (STM32H503): I2C2_SDA is wired to PB13 (AF4), not PB11.
+  DECL_ENUMERATION("i2c_bus", "i2c2_PB10_PB11", 0);
+  DECL_CONSTANT_STR("BUS_PINS_i2c2_PB10_PB11", "PB10,PB11");
+  DECL_ENUMERATION("i2c_bus", "i2c2_PB10_PB13", 1);
+  DECL_CONSTANT_STR("BUS_PINS_i2c2_PB10_PB13", "PB10,PB13");
 #endif
 
 static const struct i2c_info i2c_bus[] = {
@@ -136,6 +142,9 @@ static const struct i2c_info i2c_bus[] = {
     { I2C1, GPIO('B', 8), GPIO('B', 9), GPIO_FUNCTION(4) },
     { I2C2, GPIO('B', 10), GPIO('B', 11), GPIO_FUNCTION(4) },
     { I2C3, GPIO('A', 8), GPIO('C', 9), GPIO_FUNCTION(4) },
+#elif CONFIG_MACH_STM32H5
+    { I2C2, GPIO('B', 10), GPIO('B', 11), GPIO_FUNCTION(4) },
+    { I2C2, GPIO('B', 10), GPIO('B', 13), GPIO_FUNCTION(4) },
 #endif
 };
 
