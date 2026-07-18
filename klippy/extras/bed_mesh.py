@@ -92,6 +92,7 @@ class BedMesh:
         self.last_position = [0., 0., 0., 0.]
         self.bmc = BedMeshCalibrate(config, self)
         self.z_mesh = None
+        self.paused_mesh = None   # stash for BED_MESH_PAUSE/RESUME
         self.toolhead = None
         self.horizontal_move_z = config.getfloat('horizontal_move_z', 5.)
         self.fade_start = config.getfloat('fade_start', 1.)
@@ -121,6 +122,12 @@ class BedMesh:
         self.gcode.register_command(
             'BED_MESH_OFFSET', self.cmd_BED_MESH_OFFSET,
             desc=self.cmd_BED_MESH_OFFSET_help)
+        self.gcode.register_command(
+            'BED_MESH_PAUSE', self.cmd_BED_MESH_PAUSE,
+            desc=self.cmd_BED_MESH_PAUSE_help)
+        self.gcode.register_command(
+            'BED_MESH_RESUME', self.cmd_BED_MESH_RESUME,
+            desc=self.cmd_BED_MESH_RESUME_help)
         # Register dump webhooks
         webhooks = self.printer.lookup_object('webhooks')
         webhooks.register_endpoint(
@@ -274,6 +281,21 @@ class BedMesh:
     cmd_BED_MESH_CLEAR_help = "Clear the Mesh so no z-adjustment is made"
     def cmd_BED_MESH_CLEAR(self, gcmd):
         self.set_mesh(None)
+    cmd_BED_MESH_PAUSE_help = ("Temporarily disable mesh z-adjustment, stashing "
+                               "the active mesh for BED_MESH_RESUME (no re-probe)")
+    def cmd_BED_MESH_PAUSE(self, gcmd):
+        # Suspend mesh compensation WITHOUT losing the mesh -- e.g. for an
+        # off-bed move (front-edge purge) that sits outside the mesh, where the
+        # clamped edge correction would be wrong. Idempotent; a no-op if already
+        # paused or no mesh is active.
+        if self.z_mesh is not None:
+            self.paused_mesh = self.z_mesh
+            self.set_mesh(None)
+    cmd_BED_MESH_RESUME_help = "Re-enable the mesh stashed by BED_MESH_PAUSE"
+    def cmd_BED_MESH_RESUME(self, gcmd):
+        if self.paused_mesh is not None:
+            self.set_mesh(self.paused_mesh)
+            self.paused_mesh = None
     cmd_BED_MESH_OFFSET_help = "Add X/Y offsets to the mesh lookup"
     def cmd_BED_MESH_OFFSET(self, gcmd):
         if self.z_mesh is not None:

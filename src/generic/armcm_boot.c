@@ -51,6 +51,22 @@ reset_handler_stage_two(void)
 {
     int i;
 
+    // Enable the FPU (CP10/CP11 full access) before ANY floating-point instruction can run.
+    // REQUIRED by the hard-float ABI: Cortex-M4 resets with the FPU DISABLED and the first FP
+    // instruction then hard-faults. With -mfloat-abi=hard gcc may also use FP registers as
+    // spill slots in code containing no floats, so this cannot be scoped to "FP code".
+    //
+    // It must NOT be inherited from a bootloader. Katapult happens to leave the FPU enabled,
+    // which MASKED the absence of this write during development -- a noboot image would have
+    // hard-faulted on boot, and a coexist image behind the Prusa bootloader would have been
+    // silently depending on that bootloader's state. Guarded on the ABI (not CMSIS macros) so
+    // soft-float targets such as the H503 skip it automatically.
+#if defined(__ARM_FP) && !defined(__SOFTFP__)
+    SCB->CPACR |= (0xFu << 20);
+    __DSB();
+    __ISB();
+#endif
+
     // Clear all enabled user interrupts and user pending interrupts
     for (i = 0; i < ARRAY_SIZE(NVIC->ICER); i++) {
         NVIC->ICER[i] = 0xFFFFFFFF;
@@ -86,6 +102,21 @@ reset_handler_stage_two(void)
     __DSB();
     __ISB();
     __enable_irq();
+
+    // STACK PAINT (klipper-port): fill the unused stack with a known pattern so the
+    // high-water mark can be read back later (see the stack_usage command). Motivated by the
+    // hard-float switch: FP-in-ISR grows every exception frame 32 -> 104 bytes, because lazy
+    // stacking RESERVES the extended frame even when it defers the register save.
+    // Paint BELOW the current frame; the stack grows down from _stack_end, so the deepest use
+    // is the lowest painted word that got overwritten.
+    {
+        uint32_t sp_now;
+        asm volatile("mov %0, sp" : "=r"(sp_now));
+        uint32_t *p = &_stack_start;
+        uint32_t *lim = (uint32_t *)(sp_now - 64);   // stay clear of our own frame
+        while (p < lim)
+            *p++ = 0xC0FFEE00;
+    }
 
     // Copy global variables from flash to ram
     uint32_t count = (&_data_end - &_data_start) * 4;
