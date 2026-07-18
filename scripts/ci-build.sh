@@ -70,14 +70,12 @@ start_test klippy "Test klippy import (Python3)"
 $PYTHON klippy/klippy.py --import-test
 finish_test klippy "Test klippy import (Python3)"
 
-start_test klippy "Test klippy import (Python2)"
-$PYTHON2 klippy/klippy.py --import-test
-finish_test klippy "Test klippy import (Python2)"
+# Python2 import test dropped (Core One fork): Python2 is EOL and the port's
+# klippy extras are Python3-only (f-strings, non-ASCII comments). The Pi runs
+# Python3; the Python3 import leg above is the one that matters.
 
 start_test klippy "Test invoke klippy (Python3)"
 $PYTHON scripts/test_klippy.py -d ${DICTDIR} test/klippy/*.test
 finish_test klippy "Test invoke klippy (Python3)"
 
-start_test klippy "Test invoke klippy (Python2)"
-$PYTHON2 scripts/test_klippy.py -d ${DICTDIR} test/klippy/*.test
-finish_test klippy "Test invoke klippy (Python2)"
+# Python2 invoke-klippy test dropped (Core One fork) -- Python3-only, see above.
