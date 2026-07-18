@@ -1,0 +1,4 @@
+# Python deps for the Core One firmware packing tooling (utils/pack_fw.py).
+# Set up once at the repo root:
+#   python3 -m venv .venv && .venv/bin/pip install -r coreone/requirements.txt
+ecdsa>=0.18
