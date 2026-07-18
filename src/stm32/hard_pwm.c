@@ -309,6 +309,15 @@ static const struct gpio_pwm_info pwm_regs[] = {
     {TIM16, GPIO('B', 8),  1, GPIO_FUNCTION(1)},
     {TIM17, GPIO('F', 7),  1, GPIO_FUNCTION(1)},
     {TIM17, GPIO('B', 9),  1, GPIO_FUNCTION(1)}
+#elif CONFIG_MACH_STM32H5
+    // xBuddy extension (STM32H503): TIM2 = RGBW LED, TIM3 = white strip + fans
+    {TIM2, GPIO('A', 0), 1, GPIO_FUNCTION(1)},  // RGBW LED W
+    {TIM2, GPIO('A', 1), 2, GPIO_FUNCTION(1)},  // RGBW LED B
+    {TIM2, GPIO('A', 2), 3, GPIO_FUNCTION(1)},  // RGBW LED G
+    {TIM2, GPIO('A', 3), 4, GPIO_FUNCTION(1)},  // RGBW LED R
+    {TIM3, GPIO('A', 6), 1, GPIO_FUNCTION(2)},  // white LED strip (WLED)
+    {TIM3, GPIO('A', 7), 2, GPIO_FUNCTION(2)},  // cooling fans 1+2 (shared PWM)
+    {TIM3, GPIO('B', 0), 3, GPIO_FUNCTION(2)},  // filtration fan
 #endif
 };
 
