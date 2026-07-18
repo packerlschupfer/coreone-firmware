@@ -20,6 +20,16 @@
 
 #define FREQ_PERIPH_DIV (CONFIG_MACH_STM32F401 ? 2 : 4)
 #define FREQ_PERIPH (CONFIG_CLOCK_FREQ / FREQ_PERIPH_DIV)
+// APB2 (high-speed peripheral bus) runs at HCLK/2 on the 168MHz F4 parts
+// (F405/7/15/17/27/37/29/39): APB2 max = 84MHz = HCLK/2, matching Prusa's
+// xBuddy clock tree (peripherals.cpp). This doubles the SPI6/LCD, APB2 SPI,
+// USART6/PuppyBus and TIM1/8 clock headroom over Klipper's stock symmetric
+// HCLK/4. get_pclock_frequency() below is bus-aware, so every APB2 peripheral
+// recomputes its own divider -> identical OUTPUT rates, just from a faster bus.
+// F401 (84MHz) and F446 (180MHz, APB2 max 90) keep the conservative symmetric
+// divider (CONFIG_CLOCK_FREQ != 168MHz -> APB2_PERIPH_DIV == FREQ_PERIPH_DIV).
+#define APB2_PERIPH_DIV ((CONFIG_CLOCK_FREQ == 168000000) ? 2 : FREQ_PERIPH_DIV)
+#define FREQ_PERIPH_APB2 (CONFIG_CLOCK_FREQ / APB2_PERIPH_DIV)
 #define FREQ_USB 48000000
 
 // Map a peripheral address to its enable bits
@@ -45,6 +55,11 @@ lookup_clock_line(uint32_t periph_base)
 uint32_t
 get_pclock_frequency(uint32_t periph_base)
 {
+    // APB2 peripherals (SPI1/4/5/6, USART1/6, ADC, TIM1/8) may run on a faster
+    // bus than APB1 -- return the per-bus clock so each driver's prescaler math
+    // (and hard_pwm's timer-doubling) stays correct. AHB and APB1 -> FREQ_PERIPH.
+    if (periph_base >= APB2PERIPH_BASE && periph_base < AHB1PERIPH_BASE)
+        return FREQ_PERIPH_APB2;
     return FREQ_PERIPH;
 }
 
@@ -190,11 +205,14 @@ clock_setup(void)
     while (!(RCC->CR & RCC_CR_PLLRDY))
         ;
 
-    // Switch system clock to PLL
-    if (FREQ_PERIPH_DIV == 2)
-        RCC->CFGR = RCC_CFGR_PPRE1_DIV2 | RCC_CFGR_PPRE2_DIV2 | RCC_CFGR_SW_PLL;
-    else
-        RCC->CFGR = RCC_CFGR_PPRE1_DIV4 | RCC_CFGR_PPRE2_DIV4 | RCC_CFGR_SW_PLL;
+    // Switch system clock to PLL. APB1 divider from FREQ_PERIPH_DIV; APB2 may
+    // run faster (HCLK/2) on the 168MHz parts -- set the two buses independently
+    // (the prescaler + SW_PLL take effect together, so APB2 never sees HCLK).
+    uint32_t ppre1 = (FREQ_PERIPH_DIV == 2) ? RCC_CFGR_PPRE1_DIV2
+                                            : RCC_CFGR_PPRE1_DIV4;
+    uint32_t ppre2 = (APB2_PERIPH_DIV == 2) ? RCC_CFGR_PPRE2_DIV2
+                                            : RCC_CFGR_PPRE2_DIV4;
+    RCC->CFGR = ppre1 | ppre2 | RCC_CFGR_SW_PLL;
     while ((RCC->CFGR & RCC_CFGR_SWS_Msk) != RCC_CFGR_SWS_PLL)
         ;
 }
