@@ -133,6 +133,32 @@ static const uint8_t adc_pins[] = {
     ADC_INVALID_PIN,        // [16] opamp
     GPIO('A', 4),           // [17]
     ADC_INVALID_PIN,        // [18] opamp
+#elif CONFIG_MACH_STM32H5
+    // STM32H503 ADC1 (single ADC). Only PB1 (chamber thermistor) is used by the
+    // xBuddy extension -- confirmed vs Prusa hal.cpp: "PB1 -> ADC1_INP5",
+    // ADC_CHANNEL_5. The generic L4 fallback wrongly put PB1 at channel 16, so
+    // the ADC sampled the wrong input (read ~161C). Fill in other channels from
+    // the H503 datasheet if more ADC pins are ever needed.
+    ADC_INVALID_PIN,        // [0]
+    ADC_INVALID_PIN,        // [1]
+    ADC_INVALID_PIN,        // [2]
+    ADC_INVALID_PIN,        // [3]
+    ADC_INVALID_PIN,        // [4]
+    GPIO('B', 1),           // [5]  ADC1_IN5  chamber thermistor
+    ADC_INVALID_PIN,        // [6]
+    ADC_INVALID_PIN,        // [7]
+    ADC_INVALID_PIN,        // [8]
+    ADC_INVALID_PIN,        // [9]
+    ADC_INVALID_PIN,        // [10]
+    ADC_INVALID_PIN,        // [11]
+    ADC_INVALID_PIN,        // [12]
+    ADC_INVALID_PIN,        // [13]
+    ADC_INVALID_PIN,        // [14]
+    ADC_INVALID_PIN,        // [15]
+    ADC_INVALID_PIN,        // [16]
+    ADC_INVALID_PIN,        // [17]
+    ADC_INVALID_PIN,        // [18]
+    ADC_INVALID_PIN,        // [19]
 #else // stm32l4
     ADC_INVALID_PIN,        // vref
     GPIO('C', 0),           // ADC12_IN1 .. 16
@@ -219,6 +245,14 @@ gpio_adc_setup(uint32_t pin)
     if (!(adc->CR & ADC_CR_ADEN)) {
         // Switch on voltage regulator and wait for it to stabilize
         uint32_t cr = ADC_CR_ADVREGEN;
+#if CONFIG_MACH_STM32H5
+        // STM32H5 powers up the ADC in deep-power-down mode; DEEPPWD must be
+        // cleared in a SEPARATE write before enabling the voltage regulator.
+        // A combined write (below) leaves the regulator off on the H5, so the
+        // ADCAL/ADRDY waits never complete (klippy hangs while sending the
+        // analog-input config). ST's LL driver likewise splits these steps.
+        adc->CR = 0;
+#endif
         adc->CR = cr;
         uint32_t end = timer_read_time() + timer_from_us(20);
         while (timer_is_before(timer_read_time(), end))
