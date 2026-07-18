@@ -516,6 +516,11 @@ class LoadCellPrinterProbe:
         LoadCellProbeCommands(config, load_cell_probing_move)
         probe.HomingViaProbeHelper(config, self.get_offsets()[2])
         self._printer.add_object('probe', self)
+        # Hooks for sharing the sensor (e.g. an HX717's 2nd channel filament
+        # sensor) during a probe session. Each entry is (suspend, resume):
+        # suspend() runs before the session claims the loadcell channel, resume()
+        # after it ends (including on abort). See [hx71x_filament_sensor].
+        self._session_hooks = []
 
     def get_probe_params(self, gcmd=None):
         return self._param_helper.get_probe_params(gcmd)
@@ -523,8 +528,36 @@ class LoadCellPrinterProbe:
     def get_offsets(self, gcmd=None):
         return self._probe_offsets.get_offsets(gcmd)
 
+    def get_sensor(self):
+        return self._load_cell.get_sensor()
+
+    def register_session_hooks(self, suspend, resume):
+        # suspend() is called before a probe session (so a sensor-sharing client
+        # can yield the HX717 to the loadcell channel), resume() after it ends.
+        self._session_hooks.append((suspend, resume))
+
     def start_probe_session(self, gcmd):
-        return self._probe_session.start_probe_session(gcmd)
+        for suspend, _resume in self._session_hooks:
+            suspend()
+        # N4: if the session fails to START after suspend() ran, resume the hooks
+        # before propagating -- otherwise the filament sensor stays yielded (ch B
+        # never re-armed) for the rest of the session.
+        try:
+            session = self._probe_session.start_probe_session(gcmd)
+        except Exception:
+            for _suspend, resume in self._session_hooks:
+                resume()
+            raise
+        # Resume the hooks when the session ends (wrap its end_probe_session).
+        orig_end = session.end_probe_session
+        def end_probe_session():
+            try:
+                orig_end()
+            finally:
+                for _suspend, resume in self._session_hooks:
+                    resume()
+        session.end_probe_session = end_probe_session
+        return session
 
     def get_status(self, eventtime):
         status = self._cmd_helper.get_status(eventtime)
