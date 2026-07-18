@@ -1,0 +1,9 @@
+[Unit]
+Description=Klipper MCU auto-recover after a printer power-cycle
+# Started on-demand by udev (99-klipper-mcu-recover.rules) when the F427
+# Klipper serial re-enumerates. Oneshot: runs the recover script and exits.
+
+[Service]
+Type=oneshot
+User=pi
+ExecStart=/usr/local/bin/klipper-mcu-recover.sh
