@@ -12,6 +12,12 @@ from . import bulk_sensor
 UPDATE_INTERVAL = 0.10
 SAMPLE_ERROR_DESYNC = -0x80000000
 SAMPLE_ERROR_LONG_READ = 0x40000000
+# Interleave sample tags (must match src/sensor_hx71x.c HX_TAG_*). Set only when
+# the MCU is interleaving; a tagged value is a 24-bit count in bits 0-23, channel
+# in bit 24, "stale/discard" in bit 25.
+HX_TAG_CHB = 1 << 24
+HX_TAG_STALE = 1 << 25
+HX_VALUE_MASK = 0xFFFFFF
 
 # Implementation of HX711 and HX717
 class HX71xBase:
@@ -42,6 +48,18 @@ class HX71xBase:
         # gain/channel choices
         self.gain_channel = int(config.getchoice('gain', gain_options,
                                                  default=default_gain))
+        self._streaming = False
+        self._discard = 0
+        self._pending_restart = False
+        # Channel interleave (Prusa HX717Mux 12:1 equivalent): when on, the MCU
+        # alternates chA (loadcell/e-stall) and chB (presence) so both stay live
+        # during a print, tagging each sample. Off by default -> legacy single-
+        # channel behaviour. See enable_interleave()/_convert_samples().
+        self._interleave = False
+        self._il_chA = 1          # gain_channel for channel A (loadcell)
+        self._il_chB = 4          # gain_channel for channel B (filament sensor)
+        self._il_duty = 13        # one chB sample per this many reads
+        self._interleave_cmd = None
         # Clock tracking
         chip_smooth = self.sps * UPDATE_INTERVAL * 2
         self.ffreader = bulk_sensor.FixedFreqReader(mcu, chip_smooth, "<i")
@@ -54,8 +72,16 @@ class HX71xBase:
         mcu.add_config_cmd(
             "config_hx71x oid=%d gain_channel=%d dout_pin=%s sclk_pin=%s"
             % (self.oid, self.gain_channel, self.dout_pin, self.sclk_pin))
-        mcu.add_config_cmd("query_hx71x oid=%d rest_ticks=0"
-                           % (self.oid,), on_restart=True)
+        # data_ready_irq: drive sampling from the DOUT data-ready EXTI instead of
+        # the ~3200/s polling timer (F427 only) -> frees the MCU main loop so
+        # high-rate phase-stepping no longer starves the load cell's host query.
+        if config.getboolean('data_ready_irq', False):
+            mcu.add_config_cmd("config_hx71x_irq oid=%d" % (self.oid,))
+        mcu.add_config_cmd("query_hx71x oid=%d rest_ticks=0 gain_channel=%d"
+                           % (self.oid, self.gain_channel), on_restart=True)
+        # come up with interleave OFF after any (re)start
+        mcu.add_config_cmd("hx71x_interleave oid=%d enable=0 chA_gc=1 chB_gc=4"
+                           " duty=13" % (self.oid,), on_restart=True)
 
         mcu.register_config_callback(self._build_config)
 
@@ -67,10 +93,90 @@ class HX71xBase:
     def _build_config(self):
         cmd_queue = self.mcu.alloc_command_queue()
         self.query_hx71x_cmd = self.mcu.lookup_command(
-            "query_hx71x oid=%c rest_ticks=%u", cq=cmd_queue)
+            "query_hx71x oid=%c rest_ticks=%u gain_channel=%c", cq=cmd_queue)
+        self._interleave_cmd = self.mcu.lookup_command(
+            "hx71x_interleave oid=%c enable=%c chA_gc=%c chB_gc=%c duty=%c",
+            cq=cmd_queue)
         self.ffreader.setup_query_command("query_hx71x_status oid=%c",
                                           oid=self.oid, cq=cmd_queue)
 
+
+    def set_gain_channel(self, gain_channel):
+        # Switch the HX717 channel/gain at runtime: channel A (loadcell, =1) vs
+        # channel B (filament sensor, =4). The actual stream restart (needed so
+        # the host FixedFreqReader re-syncs with the MCU's reset sequence) is
+        # DEFERRED to _process_batch -- doing it inline here re-enters
+        # _update_clock's synchronous sensor_bulk_status query while the batch
+        # timer is mid-send and corrupts the serial handler table (KeyError
+        # sensor_bulk_status -> shutdown). _process_batch is the same
+        # batch-timer context Klipper's own error/overflow restart uses safely.
+        # ALWAYS record the requested channel, even while interleaving. It is not
+        # only the live pin: disable_interleave() reverts to "single-channel
+        # streaming on self.gain_channel", and _convert_samples() derives legacy_ch
+        # from it once interleave drops. Dropping the request here (as this did
+        # before 2026-07-19) left gain_channel stale, so a _resume() that landed
+        # while interleave happened to be on never took effect -- the chip stayed
+        # pinned to chA and every later single-channel sample was tagged 'A',
+        # silently starving/mis-feeding the ch-B filament sensor until a restart.
+        self.gain_channel = int(gain_channel)
+        if self._interleave:
+            # While interleaving, the MCU schedule owns channel selection and chB
+            # is delivered via the demux -- so no stream restart is needed here (the
+            # probe path calls disable_interleave() first, then pins chA). The
+            # recorded channel is applied by the restart disable_interleave() queues.
+            # This keeps consumer ordering at startup race-free.
+            return
+        if self._streaming:
+            self._pending_restart = True
+
+    def wait_for_channel_switch(self, timeout=2.):
+        # Block (pumping the reactor) until a deferred channel switch has been
+        # applied and its stale post-switch samples flushed. The probe's suspend
+        # hook calls this so homing never starts on the wrong channel. Safe only
+        # from a command/callback context -- never from the batch timer.
+        if not self._streaming:
+            return True
+        reactor = self.printer.get_reactor()
+        eventtime = reactor.monotonic()
+        end = eventtime + timeout
+        while (self._pending_restart or self._discard) and eventtime < end:
+            eventtime = reactor.pause(eventtime + 0.02)
+        return not self._pending_restart
+
+    def get_gain_channel(self):
+        return self.gain_channel
+
+    # --- channel interleave (Prusa HX717Mux equivalent) ---
+    def enable_interleave(self, duty=None, chA=None, chB=None):
+        # Start alternating chA/chB on the MCU so loadcell/e-stall (chA) and
+        # filament presence (chB) both stay live during a print. Pins chA as the
+        # base channel (the MCU schedule starts from A); the actual MCU command
+        # is (re)sent from _start_measurements via a deferred stream restart, so
+        # it's re-entrancy-safe and the post-switch stale samples are flushed.
+        if duty is not None:
+            self._il_duty = int(duty)
+        if chA is not None:
+            self._il_chA = int(chA)
+        if chB is not None:
+            self._il_chB = int(chB)
+        if self._interleave:
+            return
+        self.gain_channel = self._il_chA       # base channel = A
+        self._interleave = True
+        if self._streaming:
+            self._pending_restart = True
+
+    def disable_interleave(self):
+        # Revert to single-channel streaming on self.gain_channel. Used by the
+        # probe session (probing must pin chA at full rate, never interleaved).
+        if not self._interleave:
+            return
+        self._interleave = False
+        if self._streaming:
+            self._pending_restart = True
+
+    def is_interleaving(self):
+        return self._interleave
 
     def get_mcu(self):
         return self.mcu
@@ -93,19 +199,53 @@ class HX71xBase:
     def get_range(self):
         return -0x800000, 0x7FFFFF
 
-    # add_client interface, direct pass through to bulk_sensor API
-    def add_client(self, callback):
-        self.batch_bulk.add_client(callback)
+    # add_client interface. channel selects which interleaved channel the client
+    # receives ('A' = loadcell/e-stall, 'B' = filament presence); each batch row
+    # carries its channel as row[3] (see _convert_samples), so the client only
+    # ever sees its own channel's samples. In legacy (non-interleave) streaming
+    # every row is tagged with the single active channel, so a channel='A' client
+    # behaves exactly as before whenever chA is the active channel.
+    def add_client(self, callback, channel='A'):
+        def filtered(msg):
+            data = msg.get('data')
+            if data:
+                fdata = [r for r in data if r[3] == channel]
+            else:
+                fdata = data
+            return callback({'data': fdata,
+                             'errors': msg.get('errors'),
+                             'overflows': msg.get('overflows')})
+        self.batch_bulk.add_client(filtered)
 
     # Measurement decoding
     def _convert_samples(self, samples):
+        # Drop stale samples right after a channel switch (the HX717's first
+        # conversion after a gain/channel change is still the old channel).
+        if self._discard and samples:
+            n = min(self._discard, len(samples))
+            self._discard -= n
+            del samples[:n]
         adc_factor = 1. / (1 << 23)
+        il = self._interleave
+        # legacy single-channel: tag every row with the one active channel
+        legacy_ch = 'A' if self.gain_channel in (1, 3) else 'B'
         count = 0
         for ptime, val in samples:
             if val == SAMPLE_ERROR_DESYNC or val == SAMPLE_ERROR_LONG_READ:
                 self.last_error_count += 1
                 break  # additional errors are duplicates
-            samples[count] = (round(ptime, 6), val, round(val * adc_factor, 9))
+            if il:
+                if val & HX_TAG_STALE:
+                    continue            # post-switch settling sample -> drop
+                ch = 'B' if (val & HX_TAG_CHB) else 'A'
+                raw = val & HX_VALUE_MASK
+                if raw & 0x800000:
+                    raw -= 0x1000000    # sign-extend the 24-bit value
+            else:
+                ch = legacy_ch
+                raw = val               # MCU already sign-extended
+            samples[count] = (round(ptime, 6), raw,
+                              round(raw * adc_factor, 9), ch)
             count += 1
         del samples[count:]
 
@@ -115,7 +255,17 @@ class HX71xBase:
         self.last_error_count = 0
         # Start bulk reading
         rest_ticks = self.mcu.seconds_to_clock(1. / (10. * self.sps))
-        self.query_hx71x_cmd.send([self.oid, rest_ticks])
+        self.query_hx71x_cmd.send([self.oid, rest_ticks, self.gain_channel])
+        # Re-assert interleave to match host state: query_hx71x pins the base
+        # channel, then this (re)starts the MCU's chA/chB schedule from chA. A
+        # forced restart (error/overflow) therefore resyncs the schedule too.
+        if self._interleave_cmd is not None:
+            if self._interleave:
+                self._interleave_cmd.send([self.oid, 1, self._il_chA,
+                                           self._il_chB, self._il_duty])
+            else:
+                self._interleave_cmd.send([self.oid, 0, 1, 4, 13])
+        self._streaming = True
         logging.info("%s starting '%s' measurements",
                      self.sensor_type, self.name)
         # Initialize clock tracking
@@ -126,12 +276,22 @@ class HX71xBase:
         if self.printer.is_shutdown():
             return
         # Halt bulk reading
-        self.query_hx71x_cmd.send_wait_ack([self.oid, 0])
+        self.query_hx71x_cmd.send_wait_ack([self.oid, 0, self.gain_channel])
+        self._streaming = False
         self.ffreader.note_end()
         logging.info("%s finished '%s' measurements",
                     self.sensor_type, self.name)
 
     def _process_batch(self, eventtime):
+        # Apply a deferred channel switch here, where the synchronous stream
+        # restart is re-entrancy-safe (same context as the error-restart below).
+        if self._pending_restart:
+            self._pending_restart = False
+            self._finish_measurements()
+            self._start_measurements()
+            self._discard = 2
+            return {'data': [], 'errors': self.last_error_count,
+                    'overflows': self.ffreader.get_last_overflows()}
         prev_overflows = self.ffreader.get_last_overflows()
         prev_error_count = self.last_error_count
         samples = self.ffreader.pull_samples()

@@ -108,7 +108,10 @@ serial_init(void)
     USARTx->BRR = (((div / 16) << USART_BRR_DIV_Mantissa_Pos)
                    | ((div % 16) << USART_BRR_DIV_Fraction_Pos));
     USARTx->CR1 = CR1_FLAGS;
-    armcm_enable_irq(USARTx_IRQHandler, USARTx_IRQn, 0);
+    // priority 1, not 0: 0 is reserved for the phase-stepping IRQ under BASEPRI
+    // critical sections (see src/generic/armcm_irq.c). 1 keeps serial masked in
+    // irq_disable() and still above the scheduler (SysTick=2) for low-latency RX.
+    armcm_enable_irq(USARTx_IRQHandler, USARTx_IRQn, 1);
 
     gpio_peripheral(GPIO_Rx, GPIO_FUNCTION(GPIO_AF_MODE), 1);
     gpio_peripheral(GPIO_Tx, GPIO_FUNCTION(GPIO_AF_MODE), 0);

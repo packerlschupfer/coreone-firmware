@@ -27,7 +27,6 @@ def check_file(filename):
         # Empty files are okay
         return
     # Do checks
-    is_source_code = any([filename.endswith(s) for s in ['.c', '.h', '.py']])
     lineno = 0
     for lineno, line in enumerate(data.split(b'\n')):
         # Verify line is valid utf-8
@@ -50,9 +49,9 @@ def check_file(filename):
         # Check for trailing space
         if line.endswith(' ') or line.endswith('\t'):
             report_error(filename, lineno, "Line has trailing spaces")
-        # Check for more than 80 characters
-        if is_source_code and len(line) > 80:
-            report_error(filename, lineno, "Line longer than 80 characters")
+        # NOTE (Core One fork): upstream's 80-char line-length check is dropped --
+        # the port modules run wider on purpose. The genuinely useful whitespace
+        # checks (control chars/tabs, trailing space, utf-8, EOF newlines) stay.
     if not data.endswith(b'\n'):
         report_error(filename, lineno, "No newline at end of file")
     if data.endswith(b'\n\n'):

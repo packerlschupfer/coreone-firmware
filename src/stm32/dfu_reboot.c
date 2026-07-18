@@ -36,7 +36,10 @@ dfu_reboot(void)
     irq_disable();
     uint64_t *bflag = (void*)USB_BOOT_FLAG_ADDR;
     *bflag = USB_BOOT_FLAG;
-#if __CORTEX_M >= 7
+#if __CORTEX_M >= 7 && defined(__DCACHE_PRESENT) && __DCACHE_PRESENT
+    // Only chips that actually have a D-cache (e.g. STM32H7/Cortex-M7). A plain
+    // __CORTEX_M >= 7 wrongly matches Cortex-M33 (__CORTEX_M == 33), which has
+    // no D-cache and no SCB_CleanDCache_by_Addr (link error on STM32H5).
     SCB_CleanDCache_by_Addr((void*)bflag, sizeof(*bflag));
 #endif
     NVIC_SystemReset();

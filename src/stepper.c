@@ -248,7 +248,7 @@ DECL_COMMAND(command_config_stepper, "config_stepper oid=%c step_pin=%c"
              " dir_pin=%c invert_step=%c step_pulse_ticks=%u");
 
 // Return the 'struct stepper' for a given stepper oid
-static struct stepper *
+struct stepper *
 stepper_oid_lookup(uint8_t oid)
 {
     return oid_lookup(oid, command_config_stepper);
@@ -330,6 +330,34 @@ stepper_get_position(struct stepper *s)
     if (position & 0x80000000)
         return -position;
     return position;
+}
+
+// Phase-stepping (direct XDIRECT drive): interpolated electrical angle 0..1023 at
+// time `now`. One electrical period = 4 full steps = 64 microsteps, and
+// stepper_get_position() advances at the FULL microstep rate, so a period is 64 of
+// THESE units -> 16 angle-units/unit (1024/64). [Was briefly 32, which only looked
+// right while full_steps_per_rotation was the buggy 200; after the real fix to 400
+// (0.9deg motors) the 32 double-corrected and drove every motor 2x the commanded
+// distance. 64 is the geometrically correct value.] POSITION_BIAS is a multiple of
+// 64 so it drops out of the modulo. Caller = the phase_exec timer.
+uint32_t
+stepper_get_subphase(struct stepper *s, uint32_t now)
+{
+    int32_t pos = (int32_t)(stepper_get_position(s) - POSITION_BIAS);
+    uint32_t um = (uint32_t)(((pos % 64) + 64) % 64);   // position-unit 0..63
+    uint32_t angle = um * 16;                           // 0..1008
+    uint32_t interval = s->interval;
+    if (interval) {
+        int32_t to_next = (int32_t)(s->next_step_time - now);
+        if (to_next < 0)
+            to_next = 0;
+        else if ((uint32_t)to_next > interval)
+            to_next = interval;
+        uint32_t frac = 16 - ((uint32_t)to_next * 16) / interval;  // 0..16
+        int32_t dir = (s->flags & SF_LAST_DIR) ? -1 : 1;          // VERIFY on hw
+        angle = (angle + (uint32_t)(dir * (int32_t)frac)) & 1023;
+    }
+    return angle & 1023;
 }
 
 // Report the current position of the stepper

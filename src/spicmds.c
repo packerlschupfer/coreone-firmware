@@ -83,6 +83,19 @@ spidev_get_cs_pin(struct spidev_s *spi)
     return spi->pin;
 }
 
+// Phase-stepping: expose the underlying hardware SPI peripheral so a DMA engine
+// can drive the same bus the spidev uses (src/phase_exec.c). STM32-only: the
+// spi_config.spi member exists only on the STM32 SPI driver, and phase_exec.c
+// (the sole caller) is itself STM32-only -- so guard it to keep spicmds.c, a
+// file compiled on every platform, building for AVR/etc. in the CI test set.
+#if CONFIG_MACH_STM32
+void *
+spidev_get_spi(struct spidev_s *spi)
+{
+    return spi->spi_config.spi;
+}
+#endif
+
 void
 spidev_transfer(struct spidev_s *spi, uint8_t receive_data
                 , uint8_t data_len, uint8_t *data)

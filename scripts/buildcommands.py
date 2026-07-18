@@ -481,7 +481,7 @@ def git_version():
     if not os.path.exists('.git'):
         logging.debug("No '.git' file/directory found")
         return ""
-    ver = check_output("git describe --always --tags --long --dirty").strip()
+    ver = check_output("git describe --always --tags --dirty").strip()
     logging.debug("Got git version: %s" % (repr(ver),))
     return ver
 

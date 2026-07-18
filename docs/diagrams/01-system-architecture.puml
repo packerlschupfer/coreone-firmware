@@ -1,0 +1,27 @@
+@startuml
+' coreone-firmware README — the flagship "how it fits together" diagram
+title System Container View — Core One open firmware
+
+rectangle "Operator" <<person>> as op
+
+rectangle "Raspberry Pi 4 / 5 — host" <<system_boundary>> as pi {
+  rectangle "Klipper host (klippy)\nkinematics · planner · extras" <<container>> as klippy
+  rectangle "Moonraker\nAPI / web bridge" <<container>> as moon
+}
+
+rectangle "Prusa Core One+ electronics" <<system_boundary>> as hw {
+  rectangle "xBuddy — STM32F427 (main MCU)\nCoreXY steppers · HX717 loadcell probe ·\nhotend · ILI9488 LCD · phase-stepping" <<container>> as f427
+  rectangle "xBuddy-extension — STM32H503\nchamber NTC · fans · RGBW · spool sensor" <<container>> as h503
+}
+
+rectangle "Mainsail / Fluidd" <<external_system>> as web
+rectangle "OrcaSlicer" <<external_system>> as slicer
+
+op    --> web    : "browser"
+op    --> f427   : "LCD + click-wheel"
+web   --> moon   : "HTTP :7125"
+slicer --> moon  : "upload G-code"
+moon  --> klippy : "Unix socket API"
+klippy --> f427  : "USB-CDC (1d50:614e)"
+klippy --> h503  : "USB-CDC (own USB-C)"
+@enduml
