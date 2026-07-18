@@ -96,7 +96,7 @@ gpio_adc_setup(uint32_t pin)
     if (!is_enabled_pclock(adc_base)) {
         enable_pclock(adc_base);
         adc_calibrate(adc);
-        uint32_t aticks = 4; // 4-12us sample time (depending on stm32 chip)
+        uint32_t aticks = 7; // klipper-port: max sample time (480cyc) for high-Z NTC
         adc->SMPR1 = (aticks | (aticks << 3) | (aticks << 6) | (aticks << 9)
                       | (aticks << 12) | (aticks << 15) | (aticks << 18)
                       | (aticks << 21)
@@ -105,13 +105,30 @@ gpio_adc_setup(uint32_t pin)
                       | (aticks << 12) | (aticks << 15) | (aticks << 18)
                       | (aticks << 21) | (aticks << 24) | (aticks << 27));
         adc->CR2 = CR2_FLAGS;
+        // Hold the ADC clock within its 36MHz spec independent of the APB2 bus
+        // rate (HCLK/2 = 84MHz on 168MHz F4 parts). Pick the smallest ADCPRE
+        // divider (/2,/4,/6,/8); at 84MHz this selects /4 = 21MHz -- identical
+        // to the stock /2-of-42MHz, so the 480-cycle sample timing is unchanged.
+#if CONFIG_MACH_STM32F4
+        uint32_t adc_pclk = get_pclock_frequency(adc_base), adcpre = 0;
+        while (adc_pclk / ((adcpre + 1) * 2) > 36000000 && adcpre < 3)
+            adcpre++;
+        uint32_t ccr_msk = ADC_CCR_ADCPRE_0 | ADC_CCR_ADCPRE_1;
+        uint32_t ccr_pre = adcpre * ADC_CCR_ADCPRE_0;
+#if CONFIG_MACH_STM32F401
+        ADC1_COMMON->CCR = (ADC1_COMMON->CCR & ~ccr_msk) | ccr_pre;
+#else
+        ADC123_COMMON->CCR = (ADC123_COMMON->CCR & ~ccr_msk) | ccr_pre;
+#endif
+#endif
     }
 
     if (pin == ADC_TEMPERATURE_PIN) {
+        // OR (not assign) so the ADCPRE divider set above is preserved.
 #if CONFIG_MACH_STM32F401
-        ADC1_COMMON->CCR = ADC_CCR_TSVREFE;
+        ADC1_COMMON->CCR |= ADC_CCR_TSVREFE;
 #elif !CONFIG_MACH_STM32F1
-        ADC123_COMMON->CCR = ADC_CCR_TSVREFE;
+        ADC123_COMMON->CCR |= ADC_CCR_TSVREFE;
 #endif
     } else {
         gpio_peripheral(pin, GPIO_ANALOG, 0);
