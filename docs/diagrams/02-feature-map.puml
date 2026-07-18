@@ -1,0 +1,24 @@
+@startuml
+' coreone-firmware README — capabilities grouped by where they run
+title Feature map — what the Core One port adds
+
+rectangle "STM32F427 — main MCU" <<container_boundary>> as f {
+  rectangle "Phase stepping\nTMC2130 XDIRECT, MCU-side" <<component>> as ps
+  rectangle "Sensorless homing\nStallGuard diag1 + MSCNT validate/retry" <<component>> as hm
+  rectangle "Loadcell Z-probe\nHX717" <<component>> as pr
+  rectangle "Crash + clog detection" <<component>> as cc
+  rectangle "Input shaper" <<component>> as ish
+  rectangle "Native ILI9488 LCD\nSPI6 TX-DMA" <<component>> as lc
+}
+
+rectangle "STM32H503 — extension MCU (USB)" <<container_boundary>> as h {
+  rectangle "Chamber venting\ntemperature_fan" <<component>> as ch
+  rectangle "Enclosure fans + RGBW LEDs" <<component>> as fn
+  rectangle "Spool / filament sensor" <<component>> as sp
+}
+
+rectangle "Host — klippy extras" <<container_boundary>> as ho {
+  rectangle "Multi-sheet Live-Z" <<component>> as sh
+  rectangle "Power-loss recovery" <<component>> as pl
+}
+@enduml
