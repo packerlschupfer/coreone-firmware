@@ -8,6 +8,67 @@
 #include "irq.h" // irqstatus_t
 #include "sched.h" // DECL_SHUTDOWN
 
+#if __CORTEX_M >= 3 && !CONFIG_MACH_STM32H5
+// BASEPRI-based critical sections (Cortex-M3/M4/M7). The H5/M33 has BASEPRI too but is
+// EXCLUDED (!CONFIG_MACH_STM32H5): its IRQ priorities are unaudited for the prio-0 reserve
+// and it never phase-steps (F427-only) -> H5 uses the #else PRIMASK branch (its validated
+// behaviour).
+//
+// Klipper's critical sections historically used PRIMASK ("cpsid i"), which masks
+// EVERY maskable IRQ regardless of NVIC priority. That makes it impossible to run
+// a real-time peripheral IRQ during a critical section. Instead, mask only NVIC
+// priorities >= 1 via BASEPRI, leaving priority 0 always-runnable and RESERVED for
+// the phase-stepping real-time IRQ (TIM8 + SPI3-TX DMA TC; see src/stm32/phase_exec.c).
+//
+// SAFETY INVARIANT: every IRQ Klipper relies on for its critical-section data must
+// sit at priority >= 1 so it STAYS masked here (identical to the old cpsid behavior).
+// Audited on STM32F4: serial + CAN moved 0 -> 1, USB = 1, SysTick(scheduler) = 2.
+// Nothing but the phase IRQ may use priority 0. (M0/M0+ have no BASEPRI -> see #else.)
+#define IRQ_MASK_BASEPRI (1 << (8 - __NVIC_PRIO_BITS))
+
+void
+irq_disable(void)
+{
+    asm volatile("msr basepri, %0" :: "r"(IRQ_MASK_BASEPRI) : "memory");
+}
+
+void
+irq_enable(void)
+{
+    asm volatile("msr basepri, %0" :: "r"(0) : "memory");
+}
+
+irqstatus_t
+irq_save(void)
+{
+    irqstatus_t flag;
+    asm volatile("mrs %0, basepri" : "=r" (flag) :: "memory");
+    irq_disable();
+    return flag;
+}
+
+void
+irq_restore(irqstatus_t flag)
+{
+    asm volatile("msr basepri, %0" :: "r" (flag) : "memory");
+}
+
+void
+irq_wait(void)
+{
+    // Briefly drop BASEPRI to 0 so a pending IRQ (scheduler/comms) is actually
+    // taken, then re-mask. (cpsid/cpsie is not used here so PRIMASK stays clear.)
+    if (__CORTEX_M == 7)
+        // Cortex-m7 may disable cpu counter on wfi, so use nop
+        asm volatile("msr basepri, %0\n    nop\n    msr basepri, %1\n"
+                     :: "r"(0), "r"(IRQ_MASK_BASEPRI) : "memory");
+    else
+        asm volatile("msr basepri, %0\n    wfi\n    msr basepri, %1\n"
+                     :: "r"(0), "r"(IRQ_MASK_BASEPRI) : "memory");
+}
+
+#else // Cortex-M0/M0+ : no BASEPRI register -> keep PRIMASK ("cpsid i")
+
 void
 irq_disable(void)
 {
@@ -38,12 +99,10 @@ irq_restore(irqstatus_t flag)
 void
 irq_wait(void)
 {
-    if (__CORTEX_M == 7)
-        // Cortex-m7 may disable cpu counter on wfi, so use nop
-        asm volatile("cpsie i\n    nop\n    cpsid i\n" ::: "memory");
-    else
-        asm volatile("cpsie i\n    wfi\n    cpsid i\n" ::: "memory");
+    asm volatile("cpsie i\n    wfi\n    cpsid i\n" ::: "memory");
 }
+
+#endif
 
 void
 irq_poll(void)
