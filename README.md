@@ -24,8 +24,17 @@
 ## What this is
 
 A full Klipper port for the Prusa Core One+, running on the **stock xBuddy electronics — no
-hardware changes**. It installs *alongside* the Prusa bootloader (chainloaded), so returning to
-stock firmware is just reflashing Prusa's `.bbf`. Both boards run as Klipper MCUs: the main
+hardware changes**. It installs *alongside* the Prusa bootloader (chainloaded). Returning the
+**main board** to stock is just reflashing Prusa's official `.bbf` from a USB stick, like a normal
+firmware update. The **extension board (H503)** runs our auto-boot image — Prusa's own puppy
+bootloader (v302) plus a one-line timing change. Prusa's firmware reflashes puppies *through* the
+bootloader protocol, which by design writes only the app region, so stock firmware should detect the
+board over RS-485 and install its own app, leaving our bootloader in place (functionally stock, not
+byte-for-byte). ⚠ The mechanism is verified in Prusa's source; the untested part is **timing** — our
+bootloader auto-chainloads after ~3 s of RS-485 idle, and nobody has measured whether Prusa's startup
+reaches the board inside that window. If it misses you get a failed detection and a power cycle, not
+a brick. A full byte-for-byte restore of the board needs an ST-Link (`restore-h503-swd`). Both boards
+run as Klipper MCUs: the main
 board (STM32F427) and the xBuddy-extension board (STM32H503) — each connected to the host over its
 own USB link.
 
@@ -44,8 +53,13 @@ uncommon in the wider Klipper ecosystem, so parts of this may be of interest bey
   (sub-step refinement on top of the usual full-step StallGuard result).
 - **Loadcell Z-probe** — HX717 load cell for first-layer / mesh probing (as on stock). Built on
   Klipper's upstream `load_cell_probe`; the HX717 driver and its channel interleaving are ours.
-- **Crash & clog detection** — StallGuard crash detection, plus loadcell **force-based** clog /
-  e-stall detection (most Klipper setups use a filament-motion sensor for this instead).
+- **Clog / e-stall detection** — loadcell **force-based**, independent of stepping mode (most
+  Klipper setups use a filament-motion sensor for this instead).
+- **Crash detection** — StallGuard-based, so it needs **step/dir mode**. The default is phase
+  stepping (smoother, Prusa-parity), which bypasses StallGuard — so crash detection is **off on the
+  default path**. Set `PHASE_STEP=0` per-print (a `PRINT_START` parameter, e.g. in slicer
+  start-gcode) to enable it, or `SAFE_PRINT_MODE VALUE=1` for a persistent toggle (which also forces
+  an on-bed prime).
 - **Input shaper** — accelerometer-based resonance calibration (optional kit).
 - **Chamber management** — native `temperature_fan` venting (the Core One has no chamber heater).
 - **Multi-sheet Live-Z** — per-sheet first-layer offset storage.
@@ -76,7 +90,9 @@ link is still used, but only as one of the ways to *flash* the H503. Where each 
 ## Requirements
 
 - **Printer:** Prusa Core One / Core One+ (xBuddy mainboard: STM32F427 main + STM32H503 extension).
-- **Host:** Raspberry Pi **4** (2 GB+) minimum for a complete machine — validated (10+ prints).
+- **Host:** validated on a Raspberry Pi **4 (4 GB)** over 10+ prints. The core stack idles at
+  ~200 MB resident (klippy + moonraker + ustreamer), so a lower-RAM Pi 4 is very likely fine but
+  untested.
   **Pi 5 recommended.** Klipper runs kinematics and step generation on the *host* CPU
   (single-threaded per MCU) and must deliver step timing ahead of real time; the host also does
   ongoing loadcell force-FIR (clog detection) and filament-sensor processing during prints.
