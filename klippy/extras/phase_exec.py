@@ -3109,16 +3109,31 @@ class PhaseExec:
                          "If this followed a pause, print with PHASE_STEP=0."
                          % (self._stale_segs, self._stale_motion / max(1e-9, self._steps_per_mm))
                          ) if self._stale_segs else ""
-            gapwarn = ("\n  ^^ %d TRAPQ GAP-SKIP(S): each discarded a >1s flush window and re-anchored "
-                       "XY to the host's COMMANDED position. Harmless IF nothing commanded XY motion "
-                       "in those windows; if something did, that motion was DROPPED and XY is now "
-                       "silently offset (JUMP/overflow/snap CANNOT see this). Verify before trusting "
-                       "XY: re-home, or check the part is where you expect."
-                       % self._gap_skips) if self._gap_skips else ""
+            # 🔑 THIS LINE IS FACTUAL, NOT AN ALARM -- DO NOT RE-ADD THE "re-home, XY may be
+            # offset" TEXT HERE. It used to fire on ANY gap-skip, which made it shout on the
+            # benign case: GAPSKIP=1 with lateBEF=0/reanch=0 is what EVERY one of the five
+            # validated engaged pauses looked like (2026-11-21), so the operator was told to
+            # re-home after five consecutive clean runs. Two separate problems with that:
+            #   1. IT WAS THE WRONG SIGNAL. The 2026-09-23 scrap test EXONERATED the gap-skip
+            #      path -- GAPSKIP=2 with reanch=0 and the travel STILL dropped, via
+            #      lateBEF=65045. A gap-skip is not evidence of a drop; lateBEF is.
+            #   2. IT WAS DUPLICATED AUTHORITY. "XY was lost" is decided by _latebef_verdict in
+            #      the MCU-SHAPE report, which prints its own loud warning AND sets xy_trusted=0.
+            #      A second, differently-gated alarm for the same question can only disagree with
+            #      the first -- and here it disagreed in the false-positive direction.
+            # ⇒ ONE AUTHORITY FOR "XY WAS LOST", AND IT IS NOT THIS LINE. State the fact, name
+            #   where the verdict lives, and stay quiet.
+            gapwarn = ("\n  -- GAPSKIP=%d: %d >1s flush window(s) discarded and re-anchored to the "
+                       "host's COMMANDED position. This is NORMAL on any engaged pause or idle and "
+                       "is NOT by itself evidence of lost motion (the gap-skip path was exonerated "
+                       "2026-09-23). Whether motion was actually lost is decided by lateBEF in the "
+                       "MCU-SHAPE report -- read that, not this."
+                       % (self._gap_skips, self._gap_skips)) if self._gap_skips else ""
             if self._gap_moves_kept:
-                gapwarn += ("\n  ^^ %d of those span(s) CONTAINED COMMANDED MOTION and were resumed "
-                            "at the first move instead of past it. Before 2026-09-25 that motion was "
-                            "discarded silently." % self._gap_moves_kept)
+                gapwarn += ("\n  -- %d of those span(s) contained commanded motion and were resumed "
+                            "at the first move instead of past it, i.e. THE FIX WORKING: before "
+                            "2026-09-25 that motion was discarded silently. Not a fault."
+                            % self._gap_moves_kept)
             gcmd.respond_info("[phase_exec %s] streamed %d segs, net %.4fmm | "
                               "final seg depth=%d overflow=%s dry=%s minrep=%d | "
                               "refills=%s snapSUM=%.3fmm snapMAX=%.3fmm | "

@@ -106,8 +106,37 @@ if _hole[1] <= 0:
 for nm, r in (("hole", _hole), ("bridged", _brid)):
     if abs(r[0] - 40.0) >= 0.5:
         fails.append("%s arm: motorA travelled %.3f mm, expected 40.000" % (nm, r[0]))
+
+# ---- OPERATOR-FACING TEXT: the teardown GAPSKIP line must stay FACTUAL ------------------
+# A gap-skip is NORMAL on any engaged pause or idle, and the 2026-09-23 scrap test EXONERATED
+# the gap-skip path (GAPSKIP=2, reanch=0, travel still dropped, via lateBEF=65045). The loud
+# "that motion was DROPPED ... re-home" text used to fire on ANY gap-skip, so it shouted on all
+# five validated engaged pauses (2026-11-21) -- telling the operator to re-home after five
+# consecutive clean runs. It was also DUPLICATED AUTHORITY: _latebef_verdict already decides
+# "XY was lost", prints its own loud warning and sets xy_trusted=0. Two differently-gated alarms
+# for one question can only disagree, and this one disagreed in the false-positive direction.
+_src = open(os.path.join(os.path.dirname(golden.PHASE_EXEC_PY) if os.path.dirname(golden.PHASE_EXEC_PY)
+                         else '.', os.path.basename(golden.PHASE_EXEC_PY))).read()
+_gap = _src[_src.index('gapwarn = ('):_src.index('gcmd.respond_info(', _src.index('gapwarn = ('))]
+for _bad, _why in (
+        ("re-home", "tells the operator to re-home on a bare gap-skip"),
+        ("silently offset", "claims XY is offset on a bare gap-skip"),
+        ("was DROPPED", "asserts a drop the gap-skip cannot evidence"),
+        ("CANNOT see this", "alarm framing"),
+):
+    if _bad.lower() in _gap.lower():
+        fails.append("teardown GAPSKIP text is alarming again (%r -- %s). The verdict belongs"
+                     " to _latebef_verdict, not this line." % (_bad, _why))
+if 'lateBEF' not in _gap:
+    fails.append("teardown GAPSKIP text no longer names lateBEF as the authority")
+if 'exonerated' not in _gap.lower():
+    fails.append("teardown GAPSKIP text no longer records that the gap-skip path was exonerated")
+if 'THE FIX WORKING' not in _gap:
+    fails.append("the gap_moves_kept sub-line no longer frames itself as the fix working")
+
 if fails:
     for f in fails:
         print("FAIL:", f)
     raise SystemExit(1)
-print("GAP-BRIDGE GATE: PASS  (hole BEFORE=%d -> bridged BEFORE=%d)" % (_hole[1], _brid[1]))
+print("GAP-BRIDGE GATE: PASS  (hole BEFORE=%d -> bridged BEFORE=%d; teardown text factual)"
+      % (_hole[1], _brid[1]))
