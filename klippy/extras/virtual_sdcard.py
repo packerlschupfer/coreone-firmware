@@ -7,6 +7,11 @@ import os, sys, logging, io
 
 VALID_GCODE_EXTS = ['gcode', 'g', 'gco']
 
+# States in which loading a new file is safe. ALLOWLIST, not a denylist: an
+# unknown or future state must refuse rather than be permitted. Notably a
+# PAUSED job is not here -- see _check_can_load().
+PRINT_START_STATES = ('standby', 'complete', 'cancelled')
+
 DEFAULT_ERROR_GCODE = """
 {% if 'heaters' in printer %}
    TURN_OFF_HEATERS
@@ -146,9 +151,26 @@ class VirtualSD:
         self._reset_file()
     cmd_SDCARD_PRINT_FILE_help = "Loads a SD file and starts the print.  May "\
         "include files in subdirectories."
-    def cmd_SDCARD_PRINT_FILE(self, gcmd):
+    def _check_can_load(self, gcmd):
+        # Refuse to load a file over a job that is not finished.
+        #
+        # The historical guard was `work_timer is not None`, which is true only
+        # while a print is ACTIVELY RUNNING. Pausing clears work_timer (see
+        # work_handler's exit block), so a paused job passed this check and the
+        # following _reset_file() discarded it silently -- a print destroyed by
+        # a console SDCARD_PRINT_FILE/M23 or a macro, with no error and no
+        # record of what was lost. Moonraker's API path gained its own guard in
+        # f3fe0a6; this covers the console/macro path, which no server-side
+        # guard can reach.
         if self.work_timer is not None:
             raise gcmd.error("SD busy")
+        state = self.print_stats.state
+        if state not in PRINT_START_STATES:
+            raise gcmd.error(
+                "Cannot load a file while the previous print is in state '%s'."
+                " Use SDCARD_RESET_FILE (or CANCEL_PRINT) first." % (state,))
+    def cmd_SDCARD_PRINT_FILE(self, gcmd):
+        self._check_can_load(gcmd)
         self._reset_file()
         filename = gcmd.get("FILENAME")
         if filename[0] == '/':
@@ -167,8 +189,7 @@ class VirtualSD:
         gcmd.respond_raw("SD card ok")
     def cmd_M23(self, gcmd):
         # Select SD file
-        if self.work_timer is not None:
-            raise gcmd.error("SD busy")
+        self._check_can_load(gcmd)
         self._reset_file()
         filename = gcmd.get_raw_command_parameters().strip()
         if filename.startswith('/'):
