@@ -13,9 +13,11 @@
 > See **[FORK.md](FORK.md)** for what's included + build/flash, and **[CHANGES.md](CHANGES.md)**
 > for the modification disclosure (GPLv3 §5).
 >
-> ⚠️ **Community port — experimental, not affiliated with or endorsed by Prusa Research.**
-> Flashing custom firmware is at your own risk. It coexists with the Prusa bootloader, so you
-> can return to stock at any time — see [Installation](#installation).
+> ⚠️ **Community port — not affiliated with or endorsed by Prusa Research.** It's the author's daily
+> driver on a single Core One+ — steady across 207 completed prints over ~5½ months — but that's one
+> machine's track record, so treat it as such on yours. Flashing custom firmware is at your own risk.
+> It coexists with the Prusa bootloader, so you can return to stock at any time — see
+> [Installation](#installation).
 >
 > Questions, or want to chat about the Core One port rather than open an issue for every little
 > thing? Drop into the Discord — there's a **#coreone-firmware** channel:
