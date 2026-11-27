@@ -158,8 +158,19 @@ class ILI9488:
         #      give a blank or broken screen on the next restart.
         #   2. It is a TOUCH UI and touch is not wired here: the GT911's bus and pins on
         #      the + xLCD are still unknown (his config targets the Core One L).
-        # ⇒ Opt in with `ui: graphic` once both of those are done. The import is LAZY so
-        #   `ui: text` carries no dependency on ili9488_ui at all.
+        # ⇒ Opt in with `ui: graphic` once the FIRMWARE half is in place. The import is LAZY
+        #   so `ui: text` carries no dependency on ili9488_ui at all.
+        # ⚠ CORRECTION (2026-11-22): an earlier version of this comment said to wait for BOTH
+        # the firmware AND touch. The touch half was WRONG and I wrote it before checking.
+        # ✅ THE GRAPHICAL MENU IS NAVIGABLE BY THE CLICK-WHEEL ALONE: _menu_frame reads
+        # `lcd.chars[row][0]` -- the cursor column of the stock char grid -- and paints the
+        # selected row (BLUE for '*', ORANGE for any other marker). So the encoder's selection
+        # is rendered; touch is an ADDITIONAL input, not a requirement. That is what the
+        # chars[][] tracking above is FOR -- without it the UI could draw rows but not show
+        # which one the knob is on. (coreone-host challenged the old comment; it was right to.)
+        # 📌 The one genuine cosmetic caveat without touch: _status_frame draws two on-screen
+        # buttons ("Menu", job) that cannot be pressed. Nothing is lost -- a click-wheel press
+        # still enters the menu -- but they are visibly inert.
         self.ui = None
         if config.getchoice('ui', {'graphic': True, 'text': False}, 'text'):
             from . import ili9488_ui
@@ -881,6 +892,23 @@ class ILI9488:
             self._glyph_cmd = None
             logging.info("ili9488: MCU has no display_dma_glyph;"
                          " using the expanded-pixel path")
+        # 🔴 BIND THE GRAPHICAL UI'S MCU COMMANDS -- AND NULL self.ui IF THEY ARE MISSING.
+        # BOTH HALVES ARE LOAD BEARING, AND OMITTING THIS LINE IS THE BUG THAT TOOK THE MCU
+        # DOWN ON 2026-11-22. GraphicUI.__init__ leaves fill_cmd / aa_cmd / aa_data_cmd as
+        # None; only build() looks them up. Without this call they stayed None, _fill()
+        # raised AttributeError('NoneType' has no 'send') on every flush, the repeated
+        # exception in the flush path starved the MCU link, and the LOADCELL's
+        # sensor_bulk_status timed out -> MCU shutdown. Recovery needed FIRMWARE_RESTART.
+        # ⚠ AND THE FALLBACK LIVES HERE, NOT IN build(). build() catches the missing lookups
+        # and returns False, but it is THIS line that turns False into "use the char grid" by
+        # nulling self.ui. I had assured host and coord that a host/MCU mismatch "degrades via
+        # build()'s try/except" -- that was TRUE of build() and FALSE of our tree, because
+        # nothing called it. Verifying a guard EXISTS is not verifying it is INVOKED: test the
+        # producer, not just the consumer.
+        if self.ui is not None and not self.ui.build(self.mcu):
+            logging.info("ili9488: MCU lacks the graphical primitives;"
+                         " falling back to the char grid")
+            self.ui = None
 
     def _seg(self, cs, dc, data):
         # Enqueue one segment: CS/DC levels (applied first) + optional bytes.

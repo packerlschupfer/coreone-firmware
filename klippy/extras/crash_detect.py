@@ -72,6 +72,14 @@ class CrashDetect:
                                    desc=self.cmd_CRASH_DETECT_help)
         except self.printer.config_error:
             pass        # already registered by a sibling instance
+        # 🔴 NEVER ARMED ACROSS A HOMING MOVE (Prusa PD-21372 does the same).
+        # Our sensorless homing reads the SAME TMC sg_result this detector reads, so a
+        # G28 while armed presents the homing stall as "Crash detected: StallGuard stall"
+        # and shuts the MCU down. PRINT_START arms AFTER homing, so nothing reaches this
+        # today -- but that is ORDERING, not a guard: a mid-print G28, or any reorder of
+        # PRINT_START, makes it live.
+        self.printer.register_event_handler("homing:home_rails_begin",
+                                            self._handle_home_begin)
 
     def _bind_tmc(self):
         if self.mcu is not None:
@@ -158,6 +166,29 @@ class CrashDetect:
                     mt.set_register = lambda *a, **k: None
         except Exception:
             pass
+
+    def _handle_home_begin(self, homing_state, rails):
+        # Disarm, and deliberately do NOT auto-re-arm afterwards. Two reasons:
+        #  1. ORDERING RISK. Klipper's tmc virtual endstop saves/restores SGT and friends
+        #     around the homing move, and `home_rails_end` is not guaranteed to fire after
+        #     that restore. Arming there could have our crash SGT overwritten by homing's
+        #     restore -- leaving the print armed at the WRONG sensitivity, which is worse
+        #     than being unarmed. This module has already been bitten once by TMC write
+        #     ordering on the shared SPI (the GSTAT-poll collision).
+        #  2. Unarmed is the SAFE state, and it is the normal state anyway: crash detect
+        #     is inert under phase stepping, which is the default, so most prints never
+        #     arm it at all.
+        # So: fail safe, and SAY SO -- an unannounced protection gap is the failure mode
+        # this whole detector exists to avoid.
+        if not self._armed:
+            return
+        self.disarm()
+        objs = self.printer.lookup_objects('crash_detect')
+        if objs and objs[0][1] is self:         # announce once, not per axis
+            self.printer.lookup_object('gcode').respond_info(
+                "Crash detection DISARMED for homing (homing reads the same StallGuard)."
+                " It is NOT re-armed automatically -- re-run CRASH_DETECT ENABLE=1 if you"
+                " want it back for the rest of this print.")
 
     def arm(self):
         if self._armed:

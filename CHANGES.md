@@ -670,6 +670,15 @@ copyright notices and per-file license headers are **retained unchanged**; the l
   - optional **shadow telemetry** (`CRASH_DETECT SHADOW=1`): MCU-side accumulation of the gated-in
     `sg_result` distribution + a would-trip counter, reported to the host on disarm instead of
     shutting down — for tuning `sg_floor`/`crash_sgt` from real prints. Off by default. — 2026-07-26
+- **Crash detection never armed across a homing move (host-side, `crash_detect.py`; SAFETY, no reflash).** Sensorless
+  homing reads the same TMC `sg_result` this detector watches, so a `G28` while armed would present the homing stall as
+  "Crash detected: StallGuard stall" and shut the MCU down. A `homing:home_rails_begin` handler now **disarms** across
+  any homing move and deliberately does **not** auto-re-arm (silently re-arming would hide the state change, and TMC
+  write-ordering around homing's SGT save/restore could leave it armed at the wrong sensitivity) — re-run
+  `CRASH_DETECT ENABLE=1` after. ⚠ Today only *ordering* saved it (PRINT_START arms after homing), it has **never fired
+  in ~2 months of logs**, and it is inert under phase-stepping (the default) — so this closes a **narrow,
+  never-triggered gap**, not an incident. Overlay `efeadbd2c` (Prusa PD-21372 does the same); host-only, deployed by a
+  repin, no reflash. — 2026-11-27
 
 ## Sensing
 - HX717 load cell as loadcell **Z-probe**; extruder **filament-presence** sensor on the same HX717
@@ -884,6 +893,11 @@ copyright notices and per-file license headers are **retained unchanged**; the l
   pending the GT911 bus/pins — this is not yet a working touchscreen on the +. `gt911_touch` is a `[gt911_touch]`
   config section (inert unless present); `ili9488_ui` is constructed only under `ui: graphic`. Ported by JsemOlik
   (CORE One L), reconciled to keep our panel-health probe. — 2026-11-21
+  - **`ui: graphic` call-site fix (host-side, `ili9488_display.py`; no reflash).** The graphical-UI build omitted
+    `self.ui.build(self.mcu)`; the absent call is what **took the MCU down on 2026-11-22**, and adding it also restores
+    the fallback (a `False` return nulls `self.ui` → the character grid). ⚠ **`ui: text` stays the default** and the fix
+    has **not run on hardware yet** — it makes a future *validated* `ui: graphic` retry possible, it is not itself a
+    validated feature. Overlay `3fed8e39a`; host-only, deployed by a repin. — 2026-11-27
 - PuppyBus RS-485 master, used to *flash* the H503 enclosure MCU (at runtime the H503 is a
   second Klipper MCU on its own USB); TCA6408A I/O expander. — 2026-06
 
